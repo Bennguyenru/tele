@@ -1,0 +1,82 @@
+from flask import Flask, request, render_template, jsonify
+import pandas as pd
+import numpy as np
+import openai
+import os
+
+app = Flask(__name__)
+
+# Set your OpenAI API key
+OPENAI_API_KEY = "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"
+openai.api_key = OPENAI_API_KEY
+
+# Store uploaded files
+deposits_file = None
+withdrawals_file = None
+
+def analyze_transactions(deposits_df, withdrawals_df):
+    """Analyzes transactions and detects anomalies."""
+    report = ""
+    
+    # Detect large transactions (Anomaly Detection)
+    large_deposits = deposits_df[deposits_df["Amount"] > deposits_df["Amount"].quantile(0.95)]
+    large_withdrawals = withdrawals_df[withdrawals_df["Amount"] > withdrawals_df["Amount"].quantile(0.95)]
+    
+    if not large_deposits.empty:
+        report += f"⚠️ Large Deposits Detected: {len(large_deposits)} transactions\n"
+    if not large_withdrawals.empty:
+        report += f"⚠️ Large Withdrawals Detected: {len(large_withdrawals)} transactions\n"
+    
+    return report or "✅ No anomalies detected."
+
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    global deposits_file, withdrawals_file
+    
+    if 'deposits' in request.files:
+        deposits_file = request.files['deposits']
+        deposits_df = pd.read_csv(deposits_file)
+    
+    if 'withdrawals' in request.files:
+        withdrawals_file = request.files['withdrawals']
+        withdrawals_df = pd.read_csv(withdrawals_file)
+    
+    if deposits_file and withdrawals_file:
+        deposits_df["Amount"] = deposits_df["Amount"].astype(str).str.replace(',', '').astype(float)
+        withdrawals_df["Amount"] = withdrawals_df["Amount"].astype(str).str.replace(',', '').astype(float)
+        
+        latest_date = withdrawals_df["Time of withdrawal"].max()
+        analysis = analyze_transactions(deposits_df, withdrawals_df)
+
+        report = {
+            "date": str(latest_date),
+            "total_deposits": len(deposits_df),
+            "total_withdrawals": len(withdrawals_df),
+            "analysis": analysis
+        }
+        
+        return jsonify(report)
+    else:
+        return jsonify({"error": "Please upload both deposit and withdrawal files."})
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    user_message = request.json.get("message")
+    
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are a financial assistant analyzing transactions."},
+            {"role": "user", "content": user_message}
+        ]
+    )
+    
+    reply_text = response["choices"][0]["message"]["content"].strip()
+    return jsonify({"response": reply_text})
+
+if __name__ == '__main__':
+    app.run(debug=True)
